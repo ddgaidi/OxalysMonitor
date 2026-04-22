@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { type SyntheticEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import Image from "next/image";
@@ -97,34 +97,51 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [mounted, setMounted] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
-    setMounted(true);
     const supabase = createClient();
-    supabase
-      .from("fablab")
-      .select("*")
-      .order("nom")
-      .then(({ data, error }) => {
-        if (!error && data) setFablabs(data as Fablab[]);
-        setLoadingFablabs(false);
-      });
+    let active = true;
+
+    const loadFablabs = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("fablab")
+          .select("*")
+          .order("nom");
+
+        if (!active) return;
+        if (error) {
+          console.error(error);
+        } else if (data) {
+          setFablabs(data as Fablab[]);
+        }
+      } catch (err) {
+        if (active) console.error(err);
+      } finally {
+        if (active) setLoadingFablabs(false);
+      }
+    };
+
+    void loadFablabs();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const filteredFablabs = fablabs.filter(
+  const filteredFablabs = useMemo(() => fablabs.filter(
     (f) =>
       f.nom.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      parseCity(f.adresse).toLowerCase().includes(searchQuery.toLowerCase())
-  );
+      f.adresse.toLowerCase().includes(searchQuery.toLowerCase())
+  ), [fablabs, searchQuery]);
 
   const handleSelectFablab = (fablab: Fablab) => {
     setSelectedFablab(fablab);
     setTimeout(() => setStep("credentials"), 200);
   };
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
     e.preventDefault();
     setLoading(true);
     setError("");
@@ -149,9 +166,16 @@ export default function LoginPage() {
     router.refresh();
   };
 
-  if (!mounted) return null;
-
   const t = isDark ? THEME.dark : THEME.light;
+
+  const glassPanelStyle = useMemo(() => ({
+    background: t.cardBg,
+    border: `1px solid ${t.cardBorder}`,
+    boxShadow: t.cardShadow,
+    backdropFilter: "blur(40px)",
+    WebkitBackdropFilter: "blur(40px)",
+    transition: "background 0.5s, border-color 0.5s, box-shadow 0.5s",
+  }), [t.cardBg, t.cardBorder, t.cardShadow]);
 
   return (
     <div
@@ -277,14 +301,7 @@ export default function LoginPage() {
       >
         <div
           className="relative overflow-hidden rounded-[36px] p-10"
-          style={{
-            background: t.cardBg,
-            border: `1px solid ${t.cardBorder}`,
-            boxShadow: t.cardShadow,
-            backdropFilter: "blur(40px)",
-            WebkitBackdropFilter: "blur(40px)",
-            transition: "background 0.5s, border-color 0.5s, box-shadow 0.5s",
-          }}
+          style={glassPanelStyle}
         >
           {/* Top accent line */}
           <div
@@ -300,7 +317,7 @@ export default function LoginPage() {
             className="flex justify-center mb-8"
           >
             <Image
-              src="/logo_monitor.png"
+              src={isDark ? "/oxalys-monitor-light.png" : "/oxalys-monitor.png"}
               alt="Oxalys Monitor"
               width={160}
               height={52}
@@ -411,7 +428,7 @@ export default function LoginPage() {
                           }}
                         >
                           {/* Image */}
-                          <div className="relative w-full h-20 overflow-hidden rounded-t-2xl flex-shrink-0">
+                          <div className="relative w-full h-20 overflow-hidden rounded-t-2xl shrink-0">
                             <Image
                               src={fablab.image} alt={fablab.nom} fill
                               className="object-cover"
@@ -490,11 +507,11 @@ export default function LoginPage() {
                         border: "1px solid rgba(59,130,246,0.25)",
                       }}
                     >
-                      <div className="w-5 h-5 rounded-full overflow-hidden flex-shrink-0">
+                      <div className="w-5 h-5 rounded-full overflow-hidden shrink-0">
                         <Image src={selectedFablab.image} alt={selectedFablab.nom}
                           width={20} height={20} className="object-cover w-full h-full" unoptimized />
                       </div>
-                      <span className="text-[11px] font-bold truncate max-w-[200px]"
+                      <span className="text-[11px] font-bold truncate max-w-50"
                         style={{ color: t.badgeText }}>
                         {selectedFablab.nom}
                       </span>
@@ -593,7 +610,7 @@ export default function LoginPage() {
                         "Accéder au Dashboard →"
                       )}
                     </span>
-                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
+                    <div className="absolute inset-0 bg-linear-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-700" />
                   </motion.button>
                 </form>
               </motion.div>

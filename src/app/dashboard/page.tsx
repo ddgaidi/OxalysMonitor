@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import React, {
@@ -29,8 +28,12 @@ interface DbStation {
   created_at: string;
 }
 
+type StationStatus = "stable" | "warning" | "critical" | "offline";
+type ComputedStationStatus = Exclude<StationStatus, "offline">;
+type FablabInfo = { id: string; nom: string; image?: string };
+
 interface Station extends DbStation {
-  status: "stable" | "warning" | "critical";
+  status: StationStatus;
   nom: string;
   desc: string;
   x: number;
@@ -45,7 +48,7 @@ const THRESHOLDS = {
   warning:  { temp: 28, co2: 90,  voc: 90  },
 };
 
-function computeStatus(s: DbStation): Station["status"] {
+function computeStatus(s: DbStation): ComputedStationStatus {
   const { temperature_moyenne: t, co2_moyen: c, voc_moyen: v } = s;
   if (t > THRESHOLDS.critical.temp || c > THRESHOLDS.critical.co2 || v > THRESHOLDS.critical.voc)
     return "critical";
@@ -54,7 +57,7 @@ function computeStatus(s: DbStation): Station["status"] {
   return "stable";
 }
 
-function buildDesc(s: DbStation, status: Station["status"]): string {
+function buildDesc(s: DbStation, status: StationStatus): string {
   const issues: string[] = [];
   if (s.temperature_moyenne > THRESHOLDS.critical.temp)
     issues.push(`température critique ${s.temperature_moyenne.toFixed(1)}°C`);
@@ -73,6 +76,8 @@ function buildDesc(s: DbStation, status: Station["status"]): string {
     return `⚠ Alerte : ${issues.join(", ")}. Intervention immédiate requise.`;
   if (status === "warning")
     return `Attention : ${issues.join(", ")}. Maintenance recommandée.`;
+  if (status === "offline")
+    return "Station hors ligne. Aucune donnée récente disponible.";
   return "Tous les paramètres dans les normes. Fonctionnement nominal.";
 }
 
@@ -143,13 +148,31 @@ const BOX_W = 2.6;
 const BOX_D = 2.2;
 const BOX_H = 2.0;
 
+function pseudoRandom01(seed: number): number {
+  const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function readStoredFablab(): FablabInfo | null {
+  if (typeof window === "undefined") return null;
+  const stored = window.localStorage.getItem("oxalys_fablab");
+  if (!stored) return null;
+  try {
+    return JSON.parse(stored) as FablabInfo;
+  } catch {
+    return null;
+  }
+}
+
 function CriticalRing({ color }: { color: string }) {
   const r = useRef<THREE.Mesh>(null);
   useFrame(({ clock }) => {
     if (!r.current) return;
     const t = (clock.getElapsedTime() % 1.8) / 1.8;
     r.current.scale.setScalar(1 + t * 1.8);
-    r.current.material.opacity = (1 - t) * 0.4;
+    if (r.current.material instanceof THREE.Material) {
+      (r.current.material as THREE.MeshBasicMaterial).opacity = (1 - t) * 0.4;
+    }
   });
   return (
     <mesh ref={r} position={[0, 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -171,8 +194,8 @@ function StationBox({ station, isSelected, onClick }: {
 
   useFrame(({ clock }) => {
     if (!meshRef.current) return;
-    if (isCritical) {
-      meshRef.current.material.emissiveIntensity =
+    if (isCritical && meshRef.current.material instanceof THREE.Material) {
+      (meshRef.current.material as THREE.MeshStandardMaterial).emissiveIntensity =
         0.3 + Math.sin(clock.getElapsedTime() * 3.5) * 0.22;
     }
   });
@@ -320,9 +343,9 @@ function FloatingParticles() {
   const positions = useMemo(() => {
     const arr = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
-      arr[i * 3]     = (Math.random() - 0.5) * 24;
-      arr[i * 3 + 1] = Math.random() * 6;
-      arr[i * 3 + 2] = (Math.random() - 0.5) * 24;
+      arr[i * 3] = (pseudoRandom01(i * 3 + 1) - 0.5) * 24;
+      arr[i * 3 + 1] = pseudoRandom01(i * 3 + 2) * 6;
+      arr[i * 3 + 2] = (pseudoRandom01(i * 3 + 3) - 0.5) * 24;
     }
     return arr;
   }, []);
@@ -334,7 +357,7 @@ function FloatingParticles() {
   return (
     <points ref={pts}>
       <bufferGeometry>
-        <bufferAttribute attach="attributes-position" array={positions} count={count} itemSize={3} />
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
       </bufferGeometry>
       <pointsMaterial color="#4f8fd4" size={0.04} transparent opacity={0.45} sizeAttenuation />
     </points>
@@ -439,29 +462,49 @@ export default function OxalysDashboard() {
   const [isDark, setIsDark] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [isPanelOpen, setIsPanelOpen] = useState(false);
-  const [fablab, setFablab] = useState<{ id: string; nom: string; image?: string } | null>(null);
+  const [fablab, setFablab] = useState<FablabInfo | null>(null);
   const [stations, setStations] = useState<Station[]>([]);
-  const [loadingStations, setLoadingStations] = useState(true);
+  const [loadingStations, setLoadingStations] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const fablabIdRef = useRef<string | null>(null);
 
   const theme = isDark ? THEME.dark : THEME.light;
 
+  /* ── Hydrate fablab from localStorage after mount (avoids SSR mismatch) ── */
+  useEffect(() => {
+    let active = true;
+
+    const hydrateFablab = async () => {
+      await Promise.resolve();
+      if (!active) return;
+
+      const storedFablab = readStoredFablab();
+      if (!storedFablab) {
+        setLoadingStations(false);
+        return;
+      }
+
+      setFablab(storedFablab);
+      setLoadingStations(true);
+    };
+
+    void hydrateFablab();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   /* ── Load fablab + stations + polling toutes les 10s ── */
   useEffect(() => {
-    const stored = localStorage.getItem("oxalys_fablab");
-    if (!stored) return;
-
-    let fl: { id: string; nom: string; image?: string };
-    try { fl = JSON.parse(stored); } catch { return; }
-    setFablab(fl);
-    fablabIdRef.current = fl.id;
+    const fid = fablab?.id;
+    if (!fid) return;
+    fablabIdRef.current = fid;
 
     const supabase = createClient();
 
     /* Fetch (initial + polling) */
-    const fetchStations = async (isInitial = false) => {
+    const fetchStationsInternal = async (isInitial = false) => {
       const fid = fablabIdRef.current;
       if (!fid) return;
 
@@ -504,18 +547,20 @@ export default function OxalysDashboard() {
 
       if (isInitial) {
         setLoadingStations(false);
-        /* Auto-select first station only on first load */
+        /* Auto-select first station only on the first load */
         if (raw.length > 0) {
           setSelectedId((prev) => (prev === null ? raw[0].id : prev));
         }
       }
     };
 
-    /* Initial load */
-    fetchStations(true);
+    /* The initial load */
+    fetchStationsInternal(true).catch(console.error);
 
     /* Polling every 10 seconds */
-    const interval = setInterval(() => fetchStations(false), 10_000);
+    const interval = setInterval(() => {
+      fetchStationsInternal(false).catch(console.error);
+    }, 10_000);
 
     /* Realtime (bonus — fonctionne si activé dans Supabase) */
     const channel = supabase
@@ -523,15 +568,17 @@ export default function OxalysDashboard() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "station" },
-        () => fetchStations(false)   // on réutilise le même fetch
+        () => {
+          fetchStationsInternal(false).catch(console.error);
+        }   // on réutilise le même fetch
       )
       .subscribe();
 
     return () => {
       clearInterval(interval);
-      supabase.removeChannel(channel);
+      void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [fablab?.id]);
 
   const sortedStations = useMemo(
     () =>
@@ -546,7 +593,7 @@ export default function OxalysDashboard() {
     [stations, selectedId]
   );
 
-  const criticalCount = stations.filter((s) => s.status === "critical").length;
+  const criticalCount = useMemo(() => stations.filter((s) => s.status === "critical").length, [stations]);
 
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -558,12 +605,12 @@ export default function OxalysDashboard() {
   };
 
   /* ── Dynamic panel styles ── */
-  const glassPanelStyle = {
+  const glassPanelStyle = useMemo(() => ({
     background: theme.panelBg,
     border: `1px solid ${theme.panelBorder}`,
     backdropFilter: "blur(28px)",
     WebkitBackdropFilter: "blur(28px)",
-  };
+  }), [theme.panelBg, theme.panelBorder]);
 
   return (
     <div
@@ -603,21 +650,21 @@ export default function OxalysDashboard() {
             style={glassPanelStyle}
           >
             <Image
-              src="/logo_monitor.png"
+              src={isDark ? "/oxalys-monitor-light.png" : "/oxalys-monitor.png"}
               alt="Oxalys Monitor"
               width={110}
               height={36}
-              className="h-7 w-auto object-contain flex-shrink-0"
+              className="h-7 w-auto object-contain shrink-0"
               priority
             />
             {fablab && (
               <>
                 <div
-                  className="w-px h-4 flex-shrink-0"
+                  className="w-px h-4 shrink-0"
                   style={{ background: theme.panelBorder }}
                 />
                 <span
-                  className="text-[11px] font-semibold truncate max-w-[200px]"
+                  className="text-[11px] font-semibold truncate max-w-50"
                   style={{ color: theme.textMuted }}
                 >
                   {fablab.nom}
@@ -626,7 +673,7 @@ export default function OxalysDashboard() {
             )}
             {loadingStations && (
               <div
-                className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin flex-shrink-0"
+                className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin shrink-0"
                 style={{ borderColor: `${theme.panelBorder} transparent` }}
               />
             )}
@@ -644,7 +691,7 @@ export default function OxalysDashboard() {
               className="flex items-center gap-2 rounded-xl px-3.5 py-2"
               style={glassPanelStyle}
             >
-              <span className="relative flex h-2 w-2 flex-shrink-0">
+              <span className="relative flex h-2 w-2 shrink-0">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
               </span>
@@ -671,7 +718,7 @@ export default function OxalysDashboard() {
                   className="flex items-center gap-2 rounded-xl px-3.5 py-2"
                   style={glassPanelStyle}
                 >
-                  <div className="relative flex flex-shrink-0">
+                  <div className="relative flex shrink-0">
                     <span className="absolute inline-flex h-2 w-2 rounded-full bg-red-400 opacity-75 animate-ping" />
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
                   </div>
@@ -718,7 +765,7 @@ export default function OxalysDashboard() {
 
               {/* Pill switch */}
               <div
-                className="relative flex-shrink-0"
+                className="relative shrink-0"
                 style={{
                   width: "32px",
                   height: "18px",
@@ -781,7 +828,7 @@ export default function OxalysDashboard() {
         initial={{ opacity: 0, x: -20 }}
         animate={{ opacity: 1, x: 0 }}
         transition={{ duration: 0.45, delay: 0.12 }}
-        className="absolute left-5 top-1/2 -translate-y-1/2 z-20 w-[210px]"
+        className="absolute left-5 top-1/2 -translate-y-1/2 z-20 w-52.5"
       >
         <div className="rounded-2xl p-3 flex flex-col gap-1" style={glassPanelStyle}>
           <p
@@ -830,7 +877,7 @@ export default function OxalysDashboard() {
                         : "1px solid transparent",
                     }}
                   >
-                    <div className="relative flex-shrink-0">
+                    <div className="relative shrink-0">
                       {s.status === "critical" && (
                         <span
                           className="absolute inset-0 rounded-full animate-ping"
@@ -883,12 +930,12 @@ export default function OxalysDashboard() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2.5 mb-1.5 flex-wrap">
                   <div
-                    className="w-2 h-2 rounded-full flex-shrink-0"
+                    className="w-2 h-2 rounded-full shrink-0"
                     style={{ background: STATUS_MAP[selectedStation.status].color }}
                   />
                   <h3 className="text-sm font-black truncate">{selectedStation.nom}</h3>
                   <span
-                    className="text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full flex-shrink-0"
+                    className="text-[8px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full shrink-0"
                     style={{
                       background: `${STATUS_MAP[selectedStation.status].color}18`,
                       color: STATUS_MAP[selectedStation.status].color,
@@ -907,7 +954,7 @@ export default function OxalysDashboard() {
               </div>
 
               {/* Metrics */}
-              <div className="flex items-center gap-4 flex-shrink-0">
+              <div className="flex items-center gap-4 shrink-0">
                 {[
                   { k: "Temp", v: `${selectedStation.temperature_moyenne.toFixed(1)}°C`, alert: selectedStation.temperature_moyenne > THRESHOLDS.critical.temp },
                   { k: "CO₂", v: `${selectedStation.co2_moyen} ppm`, alert: selectedStation.co2_moyen > THRESHOLDS.critical.co2 },
@@ -933,7 +980,7 @@ export default function OxalysDashboard() {
 
               <button
                 onClick={() => setIsPanelOpen(true)}
-                className="flex-shrink-0 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all"
+                className="shrink-0 px-4 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all"
                 style={{
                   color: theme.textMuted,
                   border: `1px solid ${theme.panelBorder}`,
@@ -955,7 +1002,7 @@ export default function OxalysDashboard() {
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: "110%", opacity: 0 }}
             transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute top-4 right-4 bottom-4 w-[360px] z-30 rounded-3xl overflow-hidden"
+            className="absolute top-4 right-4 bottom-4 w-90 z-30 rounded-3xl overflow-hidden"
             style={{
               background: isDark
                 ? "linear-gradient(180deg, rgba(8,12,22,0.98) 0%, rgba(5,8,16,0.98) 100%)"
