@@ -582,7 +582,7 @@ export default function LoginPage() {
                     </div>
 
                     <div className="min-w-0 flex-1">
-                      <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: t.textSubtle }}>
+                      <p className="text-[9px] font-bold uppercase tracking-wider mb-0.5" style={{ color: t.textSubtle }}>
                         Accès Démo (Hors ITIS)
                       </p>
                       <div className="relative min-h-[1.5rem]">
