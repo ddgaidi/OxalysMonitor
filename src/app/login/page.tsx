@@ -130,6 +130,16 @@ export default function LoginPage() {
     };
   }, []);
 
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const err = p.get("error");
+    if (err === "handoff") {
+      setError("La connexion depuis Oxalys Teach a échoué. Reconnectez-vous ici.");
+    } else if (err === "fablab") {
+      setError("Établissement introuvable. Choisissez de nouveau le vôtre puis connectez-vous.");
+    }
+  }, []);
+
   const filteredFablabs = useMemo(() => fablabs.filter(
     (f) =>
       f.nom.toLowerCase().includes(searchQuery.toLowerCase()) ||
