@@ -15,8 +15,9 @@ function MonitorCallbackInner() {
     const run = async () => {
       const tokenHash = searchParams.get("token_hash");
       const schoolId = searchParams.get("school_id");
+      const fromSso = searchParams.get("from_sso") === "1";
 
-      if (!tokenHash || !schoolId) {
+      if (!schoolId) {
         if (!cancelled) {
           setMessage("Lien invalide ou expiré.");
           router.replace("/login?error=handoff");
@@ -25,14 +26,32 @@ function MonitorCallbackInner() {
       }
 
       const supabase = createClient();
-      const { data, error } = await supabase.auth.verifyOtp({
-        token_hash: tokenHash,
-        type: "magiclink",
-      });
 
-      if (error || !data.session) {
+      if (fromSso) {
+        const { data: sData, error: sessionErr } = await supabase.auth.getSession();
+        if (sessionErr || !sData.session) {
+          if (!cancelled) {
+            setMessage("Session introuvable. Réessayez depuis Oxalys Teach.");
+            router.replace("/login?error=handoff");
+          }
+          return;
+        }
+      } else if (tokenHash) {
+        const { data, error } = await supabase.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: "magiclink",
+        });
+
+        if (error || !data.session) {
+          if (!cancelled) {
+            setMessage("Impossible de finaliser la connexion.");
+            router.replace("/login?error=handoff");
+          }
+          return;
+        }
+      } else {
         if (!cancelled) {
-          setMessage("Impossible de finaliser la connexion.");
+          setMessage("Lien invalide ou expiré.");
           router.replace("/login?error=handoff");
         }
         return;

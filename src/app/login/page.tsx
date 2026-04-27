@@ -137,6 +137,8 @@ export default function LoginPage() {
       setError("La connexion depuis Oxalys Teach a échoué. Reconnectez-vous ici.");
     } else if (err === "fablab") {
       setError("Établissement introuvable. Choisissez de nouveau le vôtre puis connectez-vous.");
+    } else if (err === "sso_config") {
+      setError("Configuration serveur incomplète (SSO). Vérifiez OXALYS_SSO_SHARED_SECRET et MONITOR_SSO_DEMO sur Vercel.");
     }
   }, []);
 
