@@ -531,10 +531,57 @@ export default function LoginPage() {
                   )}
                 </div>
 
-                <p className="text-[10px] font-bold uppercase tracking-[0.35em] mb-6"
+                <p className="text-[10px] font-bold uppercase tracking-[0.35em] mb-4"
                   style={{ color: t.textMuted }}>
                   Connexion
                 </p>
+
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.02, duration: 0.35 }}
+                  tabIndex={0}
+                  className="group relative mb-6 w-full select-none cursor-help rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent"
+                  style={{
+                    border: `1px solid ${isDark ? "rgba(59,130,246,0.28)" : "rgba(59,130,246,0.22)"}`,
+                    background: isDark
+                      ? "linear-gradient(125deg, rgba(59,130,246,0.14) 0%, rgba(99,102,241,0.1) 45%, rgba(124,58,237,0.08) 100%)"
+                      : "linear-gradient(125deg, rgba(59,130,246,0.12) 0%, rgba(99,102,241,0.08) 100%)",
+                    boxShadow: isDark
+                      ? "0 0 0 1px rgba(99,102,241,0.12) inset, 0 8px 32px rgba(59,130,246,0.12)"
+                      : "0 4px 24px rgba(59,130,246,0.1)",
+                  }}
+                >
+                  <div className="pointer-events-none absolute -inset-px rounded-2xl opacity-60"
+                    style={{
+                      background: "linear-gradient(90deg, transparent, rgba(96,165,250,0.2), rgba(129,140,248,0.2), transparent)",
+                    }}
+                  />
+                  <div className="relative flex min-h-[4.5rem] items-center justify-center px-3 py-3.5 sm:px-4">
+                    <p
+                      className="absolute inset-x-2 inset-y-0 flex flex-col items-center justify-center gap-1.5 text-center transition-opacity duration-300 group-hover:opacity-0 group-focus-visible:opacity-0 sm:gap-1"
+                    >
+                      <span
+                        className="text-[0.7rem] font-black uppercase leading-tight tracking-[0.08em] sm:text-base sm:tracking-tight"
+                        style={{ color: t.text }}
+                      >
+                        Tous les établissements sauf <span className="text-sky-400 sm:text-sky-300" style={isDark ? {} : { color: "#0ea5e9" }}>ITIS Formation</span>
+                      </span>
+                      <span
+                        className="font-mono text-sm font-bold tracking-tight sm:text-base"
+                        style={{ color: isDark ? "#7dd3fc" : "#0369a1" }}
+                      >
+                        admin@oxalys.fr
+                      </span>
+                    </p>
+                    <p
+                      className="absolute inset-x-2 flex items-center justify-center text-center text-base font-extrabold transition-opacity duration-300 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 sm:text-lg"
+                      style={{ color: t.text }}
+                    >
+                      Mot de passe&nbsp;: <span className="ml-1 font-mono" style={{ color: isDark ? "#a5b4fc" : "#4f46e5" }}>1234</span>
+                    </p>
+                  </div>
+                </motion.div>
 
                 <form onSubmit={handleLogin} className="flex flex-col gap-4">
                   {/* Email */}
