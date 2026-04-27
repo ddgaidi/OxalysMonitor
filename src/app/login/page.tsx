@@ -98,6 +98,8 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  /** Découverte e-mail / mot de passe (état, pas seulement CSS : hover sur group est fragile avec motion/TW v4) */
+  const [demoCredsRevealed, setDemoCredsRevealed] = useState(false);
 
   useEffect(() => {
     const supabase = createClient();
@@ -150,6 +152,7 @@ export default function LoginPage() {
 
   const handleSelectFablab = (fablab: Fablab) => {
     setSelectedFablab(fablab);
+    setDemoCredsRevealed(false);
     setTimeout(() => setStep("credentials"), 200);
   };
 
@@ -499,7 +502,7 @@ export default function LoginPage() {
                 {/* Back + badge */}
                 <div className="flex items-center gap-3 mb-7">
                   <button
-                    onClick={() => { setStep("fablab"); setError(""); }}
+                    onClick={() => { setStep("fablab"); setError(""); setDemoCredsRevealed(false); }}
                     className="w-7 h-7 rounded-lg flex items-center justify-center text-sm transition-all"
                     style={{
                       color: t.textMuted,
@@ -541,46 +544,81 @@ export default function LoginPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.02, duration: 0.35 }}
                   tabIndex={0}
-                  className="group relative mb-6 w-full select-none cursor-help rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent"
+                  className="relative mb-6 cursor-default overflow-hidden rounded-xl border outline-none transition-[box-shadow,border-color] duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/50"
                   style={{
-                    border: `1px solid ${isDark ? "rgba(59,130,246,0.28)" : "rgba(59,130,246,0.22)"}`,
-                    background: isDark
-                      ? "linear-gradient(125deg, rgba(59,130,246,0.14) 0%, rgba(99,102,241,0.1) 45%, rgba(124,58,237,0.08) 100%)"
-                      : "linear-gradient(125deg, rgba(59,130,246,0.12) 0%, rgba(99,102,241,0.08) 100%)",
-                    boxShadow: isDark
-                      ? "0 0 0 1px rgba(99,102,241,0.12) inset, 0 8px 32px rgba(59,130,246,0.12)"
-                      : "0 4px 24px rgba(59,130,246,0.1)",
+                    background: t.cardItemBg,
+                    borderColor: t.cardItemBorder,
+                    boxShadow: demoCredsRevealed
+                      ? isDark
+                        ? "0 0 0 1px rgba(59,130,246,0.25) inset"
+                        : "0 0 0 1px rgba(59,130,246,0.2) inset"
+                      : "none",
+                  }}
+                  onPointerEnter={() => setDemoCredsRevealed(true)}
+                  onPointerLeave={() => setDemoCredsRevealed(false)}
+                  onFocus={() => setDemoCredsRevealed(true)}
+                  onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+                      setDemoCredsRevealed(false);
+                    }
                   }}
                 >
-                  <div className="pointer-events-none absolute -inset-px rounded-2xl opacity-60"
-                    style={{
-                      background: "linear-gradient(90deg, transparent, rgba(96,165,250,0.2), rgba(129,140,248,0.2), transparent)",
-                    }}
-                  />
-                  <div className="relative flex min-h-[4.5rem] items-center justify-center px-3 py-3.5 sm:px-4">
-                    <p
-                      className="absolute inset-x-2 inset-y-0 flex flex-col items-center justify-center gap-1.5 text-center transition-opacity duration-300 group-hover:opacity-0 group-focus-visible:opacity-0 sm:gap-1"
+                  <div className="flex items-center gap-4 px-4 py-3">
+                    <div
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border transition-colors"
+                      style={{
+                        background: t.inputBg,
+                        borderColor: demoCredsRevealed
+                          ? "rgba(59,130,246,0.28)"
+                          : t.inputBorder,
+                        boxShadow: demoCredsRevealed
+                          ? "0 0 0 1px rgba(59,130,246,0.12)"
+                          : "none",
+                      }}
                     >
-                      <span
-                        className="text-[0.7rem] font-black uppercase leading-tight tracking-[0.08em] sm:text-base sm:tracking-tight"
-                        style={{ color: t.text }}
-                      >
-                        Tous les établissements sauf <span className="text-sky-400 sm:text-sky-300" style={isDark ? {} : { color: "#0ea5e9" }}>ITIS Formation</span>
-                      </span>
-                      <span
-                        className="font-mono text-sm font-bold tracking-tight sm:text-base"
-                        style={{ color: isDark ? "#7dd3fc" : "#0369a1" }}
-                      >
-                        admin@oxalys.fr
-                      </span>
-                    </p>
-                    <p
-                      className="absolute inset-x-2 flex items-center justify-center text-center text-base font-extrabold transition-opacity duration-300 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 sm:text-lg"
-                      style={{ color: t.text }}
-                    >
-                      Mot de passe&nbsp;: <span className="ml-1 font-mono" style={{ color: isDark ? "#a5b4fc" : "#4f46e5" }}>1234</span>
-                    </p>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: t.textSubtle }}>
+                        <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>
+                      </svg>
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[9px] font-bold uppercase tracking-wider mb-1.5" style={{ color: t.textSubtle }}>
+                        Accès Démo (Hors ITIS)
+                      </p>
+                      <div className="relative min-h-[1.5rem]">
+                        <p
+                          className="absolute inset-x-0 top-1/2 w-full -translate-y-1/2 truncate text-left text-[13px] font-medium cursor-default select-none"
+                          style={{
+                            color: t.text,
+                            zIndex: demoCredsRevealed ? 0 : 2,
+                            opacity: demoCredsRevealed ? 0 : 1,
+                            transition: "opacity 0.2s ease",
+                          }}
+                          aria-hidden={demoCredsRevealed}
+                        >
+                          admin@oxalys.fr
+                        </p>
+                        <p
+                          className="absolute inset-x-0 top-1/2 w-full -translate-y-1/2 text-left text-[13px] font-medium cursor-default select-none"
+                          style={{
+                            color: t.text,
+                            zIndex: demoCredsRevealed ? 2 : 0,
+                            opacity: demoCredsRevealed ? 1 : 0,
+                            transition: "opacity 0.2s ease",
+                          }}
+                          aria-hidden={!demoCredsRevealed}
+                        >
+                          Mot de passe&nbsp;:&nbsp;
+                          <span className="font-mono" style={{ color: isDark ? "#60a5fa" : "#2563eb" }}>1234</span>
+                        </p>
+                      </div>
+                    </div>
                   </div>
+
+                  <div
+                    className="absolute bottom-0 left-0 h-[2px] bg-blue-500/40 transition-all duration-300"
+                    style={{ width: demoCredsRevealed ? "100%" : "0%" }}
+                  />
                 </motion.div>
 
                 <form onSubmit={handleLogin} className="flex flex-col gap-4">
