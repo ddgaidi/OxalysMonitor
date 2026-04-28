@@ -21,11 +21,10 @@ import { createClient } from "@/src/lib/supabase/client";
 interface DbStation {
   id: number;
   fablab_id: string;
-  co2_moyen: number;
-  voc_moyen: number;
-  temperature_moyenne: number;
-  humidite_moyenne: number;
   created_at: string;
+  air_qualite: number;
+  nom: string;
+  placement: number;
 }
 
 type StationStatus = "stable" | "warning" | "critical" | "offline";
@@ -34,51 +33,37 @@ type FablabInfo = { id: string; nom: string; image?: string };
 
 interface Station extends DbStation {
   status: StationStatus;
-  nom: string;
   desc: string;
   x: number;
   z: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATUS LOGIC  (basé sur les métriques capteurs)
+// STATUS LOGIC  (indice qualité de l'air — aligné OxalysTeach)
 // ─────────────────────────────────────────────────────────────────────────────
+/** Optimal ≤ 64 · Dangereux 65–119 · Interdit ≥ 120 */
 const THRESHOLDS = {
-  critical: { temp: 40, co2: 150, voc: 150 },
-  warning:  { temp: 28, co2: 90,  voc: 90  },
-};
+  optimalMax: 64,
+  warning: 65,
+  critical: 120,
+} as const;
 
 function computeStatus(s: DbStation): ComputedStationStatus {
-  const { temperature_moyenne: t, co2_moyen: c, voc_moyen: v } = s;
-  if (t > THRESHOLDS.critical.temp || c > THRESHOLDS.critical.co2 || v > THRESHOLDS.critical.voc)
-    return "critical";
-  if (t > THRESHOLDS.warning.temp || c > THRESHOLDS.warning.co2 || v > THRESHOLDS.warning.voc)
-    return "warning";
+  const q = s.air_qualite;
+  if (q >= THRESHOLDS.critical) return "critical";
+  if (q >= THRESHOLDS.warning) return "warning";
   return "stable";
 }
 
 function buildDesc(s: DbStation, status: StationStatus): string {
-  const issues: string[] = [];
-  if (s.temperature_moyenne > THRESHOLDS.critical.temp)
-    issues.push(`température critique ${s.temperature_moyenne.toFixed(1)}°C`);
-  else if (s.temperature_moyenne > THRESHOLDS.warning.temp)
-    issues.push(`température élevée ${s.temperature_moyenne.toFixed(1)}°C`);
-  if (s.co2_moyen > THRESHOLDS.critical.co2)
-    issues.push(`CO₂ critique ${s.co2_moyen} ppm`);
-  else if (s.co2_moyen > THRESHOLDS.warning.co2)
-    issues.push(`CO₂ élevé ${s.co2_moyen} ppm`);
-  if (s.voc_moyen > THRESHOLDS.critical.voc)
-    issues.push(`COV critique ${s.voc_moyen} ppb`);
-  else if (s.voc_moyen > THRESHOLDS.warning.voc)
-    issues.push(`COV élevé ${s.voc_moyen} ppb`);
-
+  const q = s.air_qualite;
   if (status === "critical")
-    return `⚠ Alerte : ${issues.join(", ")}. Intervention immédiate requise.`;
+    return `⚠ Zone interdite (indice ${q} ≥ ${THRESHOLDS.critical}). Ne pas occuper l'espace sans mesures.`;
   if (status === "warning")
-    return `Attention : ${issues.join(", ")}. Maintenance recommandée.`;
+    return `Attention : zone dangereuse (indice ${q}, seuils OxalysTeach). Aération ou contrôle recommandé.`;
   if (status === "offline")
     return "Station hors ligne. Aucune donnée récente disponible.";
-  return "Tous les paramètres dans les normes. Fonctionnement nominal.";
+  return `Zone optimale (indice ${q} ≤ ${THRESHOLDS.optimalMax}). Fonctionnement nominal.`;
 }
 
 function buildStation(s: DbStation, index: number, total: number): Station {
@@ -92,7 +77,6 @@ function buildStation(s: DbStation, index: number, total: number): Station {
   return {
     ...s,
     status,
-    nom: `Station ${s.id}`,
     desc: buildDesc(s, status),
     x: col * spacingX - offsetX,
     z: row * spacingZ - (Math.ceil(total / cols) - 1) * spacingZ / 2,
@@ -103,10 +87,10 @@ function buildStation(s: DbStation, index: number, total: number): Station {
 // STATUS MAP
 // ─────────────────────────────────────────────────────────────────────────────
 const STATUS_MAP = {
-  stable:   { label: "Optimal",       color: "#22c55e", dot: "bg-emerald-500", priority: 2, emissive: 0.12 },
-  warning:  { label: "Maintenance",   color: "#f97316", dot: "bg-orange-500",  priority: 3, emissive: 0.22 },
-  critical: { label: "INTERVENTION",  color: "#ef4444", dot: "bg-red-500",     priority: 4, emissive: 0.45 },
-  offline:  { label: "Hors-ligne",    color: "#475569", dot: "bg-slate-500",   priority: 1, emissive: 0.04 },
+  stable:   { label: "Optimal",    color: "#22c55e", dot: "bg-emerald-500", priority: 2, emissive: 0.12 },
+  warning:  { label: "Dangereux",  color: "#f97316", dot: "bg-orange-500",  priority: 3, emissive: 0.22 },
+  critical: { label: "Interdit",   color: "#ef4444", dot: "bg-red-500",     priority: 4, emissive: 0.45 },
+  offline:  { label: "Hors-ligne", color: "#475569", dot: "bg-slate-500",   priority: 1, emissive: 0.04 },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -512,7 +496,8 @@ export default function OxalysDashboard() {
         .from("station")
         .select("*")
         .eq("fablab_id", fid)
-        .order("id");
+        .order("placement", { ascending: true })
+        .order("id", { ascending: true });
 
       if (error || !data) return;
 
@@ -531,10 +516,9 @@ export default function OxalysDashboard() {
           })();
           return {
             ...(existing ?? buildStation(s, i, raw.length)),
-            co2_moyen:           s.co2_moyen,
-            voc_moyen:           s.voc_moyen,
-            temperature_moyenne: s.temperature_moyenne,
-            humidite_moyenne:    s.humidite_moyenne,
+            air_qualite: s.air_qualite,
+            nom: s.nom,
+            placement: s.placement,
             status,
             desc: buildDesc(s, status),
             x: pos.x,
@@ -583,7 +567,8 @@ export default function OxalysDashboard() {
   const sortedStations = useMemo(
     () =>
       [...stations].sort(
-        (a, b) => STATUS_MAP[b.status].priority - STATUS_MAP[a.status].priority
+        (a, b) =>
+          a.placement - b.placement || a.id - b.id
       ),
     [stations]
   );
@@ -723,7 +708,7 @@ export default function OxalysDashboard() {
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
                   </div>
                   <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider whitespace-nowrap">
-                    {criticalCount} Critique{criticalCount > 1 ? "s" : ""}
+                    {criticalCount} Interdit{criticalCount > 1 ? "s" : ""}
                   </span>
                 </motion.div>
               )}
@@ -953,29 +938,29 @@ export default function OxalysDashboard() {
                 </p>
               </div>
 
-              {/* Metrics */}
+              {/* Métrique qualité de l'air */}
               <div className="flex items-center gap-4 shrink-0">
-                {[
-                  { k: "Temp", v: `${selectedStation.temperature_moyenne.toFixed(1)}°C`, alert: selectedStation.temperature_moyenne > THRESHOLDS.critical.temp },
-                  { k: "CO₂", v: `${selectedStation.co2_moyen} ppm`, alert: selectedStation.co2_moyen > THRESHOLDS.critical.co2 },
-                  { k: "COV", v: `${selectedStation.voc_moyen} ppb`, alert: selectedStation.voc_moyen > THRESHOLDS.critical.voc },
-                  { k: "Humidité", v: `${selectedStation.humidite_moyenne}%`, alert: false },
-                ].map(({ k, v, alert }) => (
-                  <div key={k} className="text-center">
-                    <p
-                      className="text-[8px] font-bold uppercase tracking-wider"
-                      style={{ color: theme.textSubtle }}
-                    >
-                      {k}
-                    </p>
-                    <p
-                      className="text-[13px] font-black mt-0.5"
-                      style={{ color: alert ? "#ef4444" : theme.text }}
-                    >
-                      {v}
-                    </p>
-                  </div>
-                ))}
+                <div className="text-center">
+                  <p
+                    className="text-[8px] font-bold uppercase tracking-wider"
+                    style={{ color: theme.textSubtle }}
+                  >
+                    Qualité de l&apos;air
+                  </p>
+                  <p
+                    className="text-[13px] font-black mt-0.5"
+                    style={{
+                      color:
+                        selectedStation.air_qualite >= THRESHOLDS.critical
+                          ? "#ef4444"
+                          : selectedStation.air_qualite >= THRESHOLDS.warning
+                          ? "#f97316"
+                          : theme.text,
+                    }}
+                  >
+                    {selectedStation.air_qualite}
+                  </p>
+                </div>
               </div>
 
               <button
@@ -1076,24 +1061,21 @@ export default function OxalysDashboard() {
                 </p>
               </div>
 
-              {/* Metrics */}
+              {/* Qualité de l'air */}
               <div className="mb-6">
                 <p
                   className="text-[9px] font-bold uppercase tracking-[0.3em] mb-3"
                   style={{ color: theme.textSubtle }}
                 >
-                  Métriques capteur
+                  Métrique capteur
                 </p>
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { label: "Température", value: `${selectedStation.temperature_moyenne.toFixed(1)}°C`, warning: selectedStation.temperature_moyenne > THRESHOLDS.warning.temp, critical: selectedStation.temperature_moyenne > THRESHOLDS.critical.temp },
-                    { label: "CO₂", value: `${selectedStation.co2_moyen} ppm`, warning: selectedStation.co2_moyen > THRESHOLDS.warning.co2, critical: selectedStation.co2_moyen > THRESHOLDS.critical.co2 },
-                    { label: "COV (VOC)", value: `${selectedStation.voc_moyen} ppb`, warning: selectedStation.voc_moyen > THRESHOLDS.warning.voc, critical: selectedStation.voc_moyen > THRESHOLDS.critical.voc },
-                    { label: "Humidité", value: `${selectedStation.humidite_moyenne}%`, warning: false, critical: false },
-                  ].map(({ label, value, warning, critical }) => (
+                {(() => {
+                  const q = selectedStation.air_qualite;
+                  const critical = q >= THRESHOLDS.critical;
+                  const warning = !critical && q >= THRESHOLDS.warning;
+                  return (
                     <div
-                      key={label}
-                      className="rounded-xl p-3 text-center"
+                      className="rounded-xl p-4 text-center"
                       style={{
                         background: critical
                           ? "rgba(239,68,68,0.08)"
@@ -1111,27 +1093,27 @@ export default function OxalysDashboard() {
                         className="text-[8px] font-bold uppercase tracking-wider mb-1.5"
                         style={{ color: theme.textSubtle }}
                       >
-                        {label}
+                        Qualité de l&apos;air
                       </p>
                       <p
-                        className="text-[16px] font-black"
+                        className="text-[22px] font-black"
                         style={{
                           color: critical ? "#ef4444" : warning ? "#f97316" : theme.text,
                         }}
                       >
-                        {value}
+                        {q}
                       </p>
                       {(critical || warning) && (
                         <p
                           className="text-[8px] font-bold uppercase tracking-wider mt-1"
                           style={{ color: critical ? "#ef4444" : "#f97316" }}
                         >
-                          {critical ? "⚠ Critique" : "△ Attention"}
+                          {critical ? "⚠ Interdit" : "△ Dangereux"}
                         </p>
                       )}
                     </div>
-                  ))}
-                </div>
+                  );
+                })()}
               </div>
 
               {/* Seuils reference */}
@@ -1151,13 +1133,24 @@ export default function OxalysDashboard() {
                   }}
                 >
                   {[
-                    ["Temp. critique", "> 40°C"],
-                    ["CO₂ critique", "> 150 ppm"],
-                    ["COV critique", "> 150 ppb"],
+                    ["Optimal", `≤ ${THRESHOLDS.optimalMax}`],
+                    ["Dangereux", `${THRESHOLDS.warning}–${THRESHOLDS.critical - 1}`],
+                    ["Interdit", `≥ ${THRESHOLDS.critical}`],
                   ].map(([k, v]) => (
                     <div key={k} className="flex justify-between py-0.5">
                       <span>{k}</span>
-                      <span style={{ color: "#ef4444" }}>{v}</span>
+                      <span
+                        style={{
+                          color:
+                            k === "Interdit"
+                              ? "#ef4444"
+                              : k === "Dangereux"
+                              ? "#f97316"
+                              : theme.textMuted,
+                        }}
+                      >
+                        {v}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -1173,9 +1166,9 @@ export default function OxalysDashboard() {
                   }}
                 >
                   {selectedStation.status === "critical"
-                    ? "Déclencher intervention"
+                    ? "Action zone interdite"
                     : selectedStation.status === "warning"
-                    ? "Planifier maintenance"
+                    ? "Contrôle zone dangereuse"
                     : "Générer rapport"}
                 </button>
                 <button
