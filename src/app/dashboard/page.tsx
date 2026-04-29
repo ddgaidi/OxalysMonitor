@@ -39,31 +39,31 @@ interface Station extends DbStation {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STATUS LOGIC  (indice qualité de l'air — aligné OxalysTeach)
+// STATUS LOGIC  (indice qualité de l'air)
 // ─────────────────────────────────────────────────────────────────────────────
-/** Optimal ≤ 64 · Dangereux 65–119 · Interdit ≥ 120 */
+/** Optimal < 100 · Alerte 100–299 · Danger ≥ 300 · Hors Service = pas de donnée */
 const THRESHOLDS = {
-  optimalMax: 64,
-  warning: 65,
-  critical: 120,
+  alerteMin: 100,
+  alerteMax: 299,
+  dangerMin: 300,
 } as const;
 
 function computeStatus(s: DbStation): ComputedStationStatus {
   const q = s.air_qualite;
-  if (q >= THRESHOLDS.critical) return "critical";
-  if (q >= THRESHOLDS.warning) return "warning";
+  if (q >= THRESHOLDS.dangerMin) return "critical";
+  if (q >= THRESHOLDS.alerteMin) return "warning";
   return "stable";
 }
 
 function buildDesc(s: DbStation, status: StationStatus): string {
   const q = s.air_qualite;
   if (status === "critical")
-    return `⚠ Zone interdite (indice ${q} ≥ ${THRESHOLDS.critical}). Ne pas occuper l'espace sans mesures.`;
+    return `⚠ Danger (indice ${q} ≥ ${THRESHOLDS.dangerMin}). Risque élevé — intervention ou protection adaptée.`;
   if (status === "warning")
-    return `Attention : zone dangereuse (indice ${q}, seuils OxalysTeach). Aération ou contrôle recommandé.`;
+    return `Alerte (indice ${q}, plage ${THRESHOLDS.alerteMin}–${THRESHOLDS.alerteMax}). Aération ou contrôle recommandé.`;
   if (status === "offline")
-    return "Station hors ligne. Aucune donnée récente disponible.";
-  return `Zone optimale (indice ${q} ≤ ${THRESHOLDS.optimalMax}). Fonctionnement nominal.`;
+    return "Hors service : aucune donnée reçue (timeout ou capteur HS).";
+  return `Optimal (indice ${q} < ${THRESHOLDS.alerteMin}). Fonctionnement nominal.`;
 }
 
 function buildStation(s: DbStation, index: number, total: number): Station {
@@ -87,10 +87,10 @@ function buildStation(s: DbStation, index: number, total: number): Station {
 // STATUS MAP
 // ─────────────────────────────────────────────────────────────────────────────
 const STATUS_MAP = {
-  stable:   { label: "Optimal",    color: "#22c55e", dot: "bg-emerald-500", priority: 2, emissive: 0.12 },
-  warning:  { label: "Dangereux",  color: "#f97316", dot: "bg-orange-500",  priority: 3, emissive: 0.22 },
-  critical: { label: "Interdit",   color: "#ef4444", dot: "bg-red-500",     priority: 4, emissive: 0.45 },
-  offline:  { label: "Hors-ligne", color: "#475569", dot: "bg-slate-500",   priority: 1, emissive: 0.04 },
+  stable:   { label: "Optimal",     color: "#22c55e", dot: "bg-emerald-500", priority: 2, emissive: 0.12 },
+  warning:  { label: "Alerte",      color: "#f97316", dot: "bg-orange-500",  priority: 3, emissive: 0.22 },
+  critical: { label: "Danger",      color: "#ef4444", dot: "bg-red-500",     priority: 4, emissive: 0.45 },
+  offline:  { label: "Hors Service", color: "#475569", dot: "bg-slate-500",  priority: 1, emissive: 0.04 },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -708,7 +708,7 @@ export default function OxalysDashboard() {
                     <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
                   </div>
                   <span className="text-[10px] font-bold text-red-400 uppercase tracking-wider whitespace-nowrap">
-                    {criticalCount} Interdit{criticalCount > 1 ? "s" : ""}
+                    {criticalCount} en Danger
                   </span>
                 </motion.div>
               )}
@@ -951,9 +951,9 @@ export default function OxalysDashboard() {
                     className="text-[13px] font-black mt-0.5"
                     style={{
                       color:
-                        selectedStation.air_qualite >= THRESHOLDS.critical
+                        selectedStation.air_qualite >= THRESHOLDS.dangerMin
                           ? "#ef4444"
-                          : selectedStation.air_qualite >= THRESHOLDS.warning
+                          : selectedStation.air_qualite >= THRESHOLDS.alerteMin
                           ? "#f97316"
                           : theme.text,
                     }}
@@ -1071,8 +1071,8 @@ export default function OxalysDashboard() {
                 </p>
                 {(() => {
                   const q = selectedStation.air_qualite;
-                  const critical = q >= THRESHOLDS.critical;
-                  const warning = !critical && q >= THRESHOLDS.warning;
+                  const critical = q >= THRESHOLDS.dangerMin;
+                  const warning = !critical && q >= THRESHOLDS.alerteMin;
                   return (
                     <div
                       className="rounded-xl p-4 text-center"
@@ -1108,7 +1108,7 @@ export default function OxalysDashboard() {
                           className="text-[8px] font-bold uppercase tracking-wider mt-1"
                           style={{ color: critical ? "#ef4444" : "#f97316" }}
                         >
-                          {critical ? "⚠ Interdit" : "△ Dangereux"}
+                          {critical ? "⚠ Danger" : "△ Alerte"}
                         </p>
                       )}
                     </div>
@@ -1133,19 +1133,22 @@ export default function OxalysDashboard() {
                   }}
                 >
                   {[
-                    ["Optimal", `≤ ${THRESHOLDS.optimalMax}`],
-                    ["Dangereux", `${THRESHOLDS.warning}–${THRESHOLDS.critical - 1}`],
-                    ["Interdit", `≥ ${THRESHOLDS.critical}`],
+                    ["Optimal", "< 100"],
+                    ["Alerte", `${THRESHOLDS.alerteMin}–${THRESHOLDS.alerteMax}`],
+                    ["Danger", `≥ ${THRESHOLDS.dangerMin}`],
+                    ["Hors Service", "aucune donnée (timeout ou capteur HS)"],
                   ].map(([k, v]) => (
                     <div key={k} className="flex justify-between py-0.5">
                       <span>{k}</span>
                       <span
                         style={{
                           color:
-                            k === "Interdit"
+                            k === "Danger"
                               ? "#ef4444"
-                              : k === "Dangereux"
+                              : k === "Alerte"
                               ? "#f97316"
+                              : k === "Hors Service"
+                              ? "#64748b"
                               : theme.textMuted,
                         }}
                       >
@@ -1166,9 +1169,9 @@ export default function OxalysDashboard() {
                   }}
                 >
                   {selectedStation.status === "critical"
-                    ? "Action zone interdite"
+                    ? "Action zone Danger"
                     : selectedStation.status === "warning"
-                    ? "Contrôle zone dangereuse"
+                    ? "Contrôle zone Alerte"
                     : "Générer rapport"}
                 </button>
                 <button
