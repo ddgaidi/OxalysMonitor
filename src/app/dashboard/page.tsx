@@ -544,7 +544,7 @@ export default function OxalysDashboard() {
     /* Polling every 10 seconds */
     const interval = setInterval(() => {
       fetchStationsInternal(false).catch(console.error);
-    }, 10_000);
+    }, 1_000);
 
     /* Realtime (bonus — fonctionne si activé dans Supabase) */
     const channel = supabase
