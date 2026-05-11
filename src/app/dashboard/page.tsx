@@ -22,6 +22,7 @@ interface DbStation {
   id: number;
   fablab_id: string;
   created_at: string;
+  last_seen_at: string | null;
   air_qualite: number | null;
   nom: string;
   placement: number;
@@ -40,7 +41,7 @@ interface Station extends DbStation {
 // ─────────────────────────────────────────────────────────────────────────────
 // STATUS LOGIC  (indice qualité de l'air)
 // ─────────────────────────────────────────────────────────────────────────────
-/** Air Quality Sensor v1.3: Optimal < 180 · Moyen 180–259 · Alerte 260–389 · Danger ≥ 390 · Hors service = pas de donnée */
+/** Air Quality Sensor v1.3: Optimal < 180 · Moyen 180–259 · Alerte 260–389 · Danger ≥ 390 · Hors ligne = aucune activité récente */
 const THRESHOLDS = {
   mediumMin: 180,
   mediumMax: 259,
@@ -49,6 +50,15 @@ const THRESHOLDS = {
   dangerMin: 390,
 } as const;
 
+const OFFLINE_TIMEOUT_MS = 10_000;
+
+function isStationOffline(station: DbStation): boolean {
+  return (
+    !station.last_seen_at ||
+    Date.now() - new Date(station.last_seen_at).getTime() > OFFLINE_TIMEOUT_MS
+  );
+}
+
 function getAirQualityValue(s: DbStation): number | null {
   return typeof s.air_qualite === "number" && Number.isFinite(s.air_qualite)
     ? s.air_qualite
@@ -56,6 +66,7 @@ function getAirQualityValue(s: DbStation): number | null {
 }
 
 function computeStatus(s: DbStation): StationStatus {
+  if (isStationOffline(s)) return "offline";
   const q = getAirQualityValue(s);
   if (q === null) return "offline";
   if (q >= THRESHOLDS.dangerMin) return "critical";
@@ -73,7 +84,7 @@ function buildDesc(s: DbStation, status: StationStatus): string {
   if (status === "medium")
     return `Moyen (indice ${q}, plage ${THRESHOLDS.mediumMin}–${THRESHOLDS.mediumMax}). Surveillance recommandée.`;
   if (status === "offline")
-    return "Hors service : aucune donnée reçue (timeout ou capteur HS).";
+    return "Hors ligne : aucune activité récente reçue depuis la station.";
   return `Optimal (indice ${q} < ${THRESHOLDS.mediumMin}). Fonctionnement nominal.`;
 }
 
@@ -106,7 +117,7 @@ const STATUS_MAP = {
   medium:   { label: "Moyen",       color: "#eab308", dot: "bg-yellow-500",   priority: 3, emissive: 0.18 },
   warning:  { label: "Alerte",      color: "#f97316", dot: "bg-orange-500",  priority: 4, emissive: 0.22 },
   critical: { label: "Danger",      color: "#ef4444", dot: "bg-red-500",     priority: 5, emissive: 0.45 },
-  offline:  { label: "Hors service", color: "#64748b", dot: "bg-slate-500",  priority: 1, emissive: 0.04 },
+  offline:  { label: "Hors ligne", color: "#64748b", dot: "bg-slate-500",  priority: 1, emissive: 0.04 },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -533,6 +544,7 @@ export default function OxalysDashboard() {
           return {
             ...(existing ?? buildStation(s, i, raw.length)),
             air_qualite: s.air_qualite,
+            last_seen_at: s.last_seen_at,
             nom: s.nom,
             placement: s.placement,
             status,
@@ -1140,7 +1152,7 @@ export default function OxalysDashboard() {
                     ["Moyen", `${THRESHOLDS.mediumMin}–${THRESHOLDS.mediumMax}`],
                     ["Alerte", `${THRESHOLDS.alerteMin}–${THRESHOLDS.alerteMax}`],
                     ["Danger", `≥ ${THRESHOLDS.dangerMin}`],
-                    ["Hors service", "aucune donnée"],
+                    ["Hors ligne", "> 10s sans activité"],
                   ].map(([k, v]) => (
                     <div key={k} className="flex justify-between py-0.5">
                       <span>{k}</span>
@@ -1153,7 +1165,7 @@ export default function OxalysDashboard() {
                               ? "#f97316"
                               : k === "Moyen"
                               ? "#eab308"
-                              : k === "Hors service"
+                              : k === "Hors ligne"
                               ? "#64748b"
                               : theme.textMuted,
                         }}
@@ -1181,7 +1193,7 @@ export default function OxalysDashboard() {
                     : selectedStation.status === "medium"
                     ? "Surveillance zone Moyen"
                     : selectedStation.status === "offline"
-                    ? "Capteur hors service"
+                    ? "Station hors ligne"
                     : "Générer rapport"}
                 </button>
                 <button
