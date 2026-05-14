@@ -31,7 +31,7 @@ export async function GET(request: NextRequest) {
   const s = url.searchParams.get("s");
 
   const base = new URL(request.nextUrl.origin);
-  const fail = (q: string) => NextResponse.redirect(new URL(`/login?error=${q}`, base));
+  const fail = (q: string) => NextResponse.redirect(new URL(`/connexion?error=${q}`, base));
 
   if (!d || !s) return fail("handoff");
 

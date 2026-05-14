@@ -10,6 +10,6 @@ export default async function RootPage() {
   if (user) {
     redirect("/dashboard");
   } else {
-    redirect("/login");
+    redirect("/connexion");
   }
 }

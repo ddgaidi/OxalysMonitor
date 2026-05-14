@@ -20,7 +20,7 @@ function MonitorCallbackInner() {
       if (!schoolId) {
         if (!cancelled) {
           setMessage("Lien invalide ou expiré.");
-          router.replace("/login?error=handoff");
+          router.replace("/connexion?error=handoff");
         }
         return;
       }
@@ -32,7 +32,7 @@ function MonitorCallbackInner() {
         if (sessionErr || !sData.session) {
           if (!cancelled) {
             setMessage("Session introuvable. Réessayez depuis Oxalys Teach.");
-            router.replace("/login?error=handoff");
+            router.replace("/connexion?error=handoff");
           }
           return;
         }
@@ -45,14 +45,14 @@ function MonitorCallbackInner() {
         if (error || !data.session) {
           if (!cancelled) {
             setMessage("Impossible de finaliser la connexion.");
-            router.replace("/login?error=handoff");
+            router.replace("/connexion?error=handoff");
           }
           return;
         }
       } else {
         if (!cancelled) {
           setMessage("Lien invalide ou expiré.");
-          router.replace("/login?error=handoff");
+          router.replace("/connexion?error=handoff");
         }
         return;
       }
@@ -66,7 +66,7 @@ function MonitorCallbackInner() {
       if (fabError || !fabRow) {
         if (!cancelled) {
           setMessage("Établissement introuvable.");
-          router.replace("/login?error=fablab");
+          router.replace("/connexion?error=fablab");
         }
         return;
       }

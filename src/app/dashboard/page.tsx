@@ -613,7 +613,7 @@ export default function OxalysDashboard() {
     const supabase = createClient();
     await supabase.auth.signOut();
     localStorage.removeItem("oxalys_fablab");
-    router.push("/login");
+    router.push("/connexion");
     router.refresh();
   };
 

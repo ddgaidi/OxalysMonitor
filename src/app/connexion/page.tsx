@@ -85,7 +85,7 @@ function getGradient(index: number) {
   return GRADIENT_PAIRS[index % GRADIENT_PAIRS.length];
 }
 
-export default function LoginPage() {
+export default function ConnexionPage() {
   const router = useRouter();
   const [isDark, setIsDark] = useState(true);
   const [step, setStep] = useState<"fablab" | "credentials">("fablab");
@@ -156,7 +156,7 @@ export default function LoginPage() {
     setTimeout(() => setStep("credentials"), 200);
   };
 
-  const handleLogin = async (e: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
+  const handleConnexion = async (e: SyntheticEvent<HTMLFormElement, SubmitEvent>) => {
     e.preventDefault();
     setLoading(true);
     setError("");
@@ -621,7 +621,7 @@ export default function LoginPage() {
                   />
                 </motion.div>
 
-                <form onSubmit={handleLogin} className="flex flex-col gap-4">
+                <form onSubmit={handleConnexion} className="flex flex-col gap-4">
                   {/* Email */}
                   <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.05 }} className="group">
