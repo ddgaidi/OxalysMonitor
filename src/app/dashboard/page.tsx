@@ -10,10 +10,11 @@ import React, {
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { OrbitControls, Grid, Html } from "@react-three/drei";
+import { OrbitControls, Grid, Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import Image from "next/image";
 import { createClient } from "@/src/lib/supabase/client";
+import type { DbMembreRole, MonitorRole } from "@/src/lib/roles";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES
@@ -37,6 +38,27 @@ interface Station extends DbStation {
   x: number;
   z: number;
 }
+
+type AdminLog = {
+  id: string;
+  fablab_id: string | null;
+  actor_membre_id?: string | null;
+  actor_personnel_id?: string | null;
+  actor_role: string | null;
+  action: string;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+type AdminMember = {
+  id: string;
+  auth_id: string | null;
+  prenom: string | null;
+  nom: string | null;
+  email: string | null;
+  fablab_ref: string | null;
+  role: DbMembreRole | string | null;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATUS LOGIC  (indice qualité de l'air)
@@ -94,18 +116,21 @@ function formatAirQualityValue(value: number | null): string {
 
 function buildStation(s: DbStation, index: number, total: number): Station {
   const status = computeStatus(s);
-  const cols = Math.min(3, total);
-  const col = index % cols;
-  const row = Math.floor(index / cols);
+  const maxColumns = 4;
+  const row = Math.floor(index / maxColumns);
+  const col = index % maxColumns;
+  const rowStartIndex = row * maxColumns;
+  const rowLength = Math.min(maxColumns, total - rowStartIndex);
+  const rowCount = Math.ceil(total / maxColumns);
   const spacingX = total <= 3 ? 8 : 7;
   const spacingZ = 8;
-  const offsetX = ((cols - 1) * spacingX) / 2;
+  const offsetX = ((rowLength - 1) * spacingX) / 2;
   return {
     ...s,
     status,
     desc: buildDesc(s, status),
     x: col * spacingX - offsetX,
-    z: row * spacingZ - (Math.ceil(total / cols) - 1) * spacingZ / 2,
+    z: row * spacingZ - (rowCount - 1) * spacingZ / 2,
   };
 }
 
@@ -119,6 +144,13 @@ const STATUS_MAP = {
   critical: { label: "Danger",      color: "#ef4444", dot: "bg-red-500",     priority: 5, emissive: 0.45 },
   offline:  { label: "Hors ligne", color: "#64748b", dot: "bg-slate-500",  priority: 1, emissive: 0.04 },
 } as const;
+
+const ADMIN_ROLE_OPTIONS: { value: DbMembreRole; label: string; color: string }[] = [
+  { value: "etudiant", label: "Etudiant", color: "#94a3b8" },
+  { value: "professeur", label: "Professeur", color: "#22c55e" },
+  { value: "technicien", label: "Technicien", color: "#60a5fa" },
+  { value: "administrateur", label: "Admin", color: "#f59e0b" },
+];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THEME TOKENS
@@ -155,9 +187,23 @@ const THEME = {
 // ─────────────────────────────────────────────────────────────────────────────
 // 3D: MACHINE BOX
 // ─────────────────────────────────────────────────────────────────────────────
-const BOX_W = 2.6;
-const BOX_D = 2.2;
-const BOX_H = 2.0;
+const BOX_W = 2.55;
+const BOX_D = 2.1;
+const BOX_H = 3.2;
+
+const STATION_MODEL_URL = "/station.glb";
+const STATION_MODEL_SCALE = 1.65;
+const STATION_POLL_INTERVAL_MS = 10_000;
+
+type TintableStationMaterial = THREE.Material & {
+  color?: THREE.Color;
+  emissive?: THREE.Color;
+  emissiveIntensity?: number;
+  userData: {
+    baseColor?: THREE.Color;
+    baseEmissive?: THREE.Color;
+  };
+};
 
 function pseudoRandom01(seed: number): number {
   const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
@@ -193,52 +239,136 @@ function CriticalRing({ color }: { color: string }) {
   );
 }
 
+function applyStationMaterial(
+  material: THREE.Material,
+  color: THREE.Color,
+  opacity: number,
+  emissiveIntensity: number,
+) {
+  const tintable = material as TintableStationMaterial;
+
+  material.transparent = opacity < 1;
+  material.opacity = opacity;
+  material.depthWrite = opacity >= 0.9;
+
+  if (tintable.color instanceof THREE.Color) {
+    tintable.userData.baseColor ??= tintable.color.clone();
+    tintable.color.copy(tintable.userData.baseColor).lerp(color, 0.18);
+  }
+
+  if (tintable.emissive instanceof THREE.Color) {
+    tintable.userData.baseEmissive ??= tintable.emissive.clone();
+    tintable.emissive.copy(tintable.userData.baseEmissive).lerp(color, 0.7);
+    tintable.emissiveIntensity = emissiveIntensity;
+  }
+
+  material.needsUpdate = true;
+}
+
+function CriticalMaterialPulse({ materials }: { materials: THREE.Material[] }) {
+  useFrame(({ clock }) => {
+    const pulse = 0.34 + Math.sin(clock.getElapsedTime() * 3.5) * 0.18;
+    materials.forEach((material) => {
+      const tintable = material as TintableStationMaterial;
+      if (tintable.emissive instanceof THREE.Color) {
+        tintable.emissiveIntensity = pulse;
+      }
+    });
+  });
+
+  return null;
+}
+
+function StationModel({
+  color,
+  opacity,
+  emissiveIntensity,
+  isCritical,
+}: {
+  color: THREE.Color;
+  opacity: number;
+  emissiveIntensity: number;
+  isCritical: boolean;
+}) {
+  const { scene } = useGLTF(STATION_MODEL_URL);
+
+  const { model, materials } = useMemo(() => {
+    const cloned = scene.clone(true);
+    const materials: THREE.Material[] = [];
+
+    cloned.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+
+      object.castShadow = true;
+      object.receiveShadow = true;
+
+      if (Array.isArray(object.material)) {
+        object.material = object.material.map((material) => {
+          const clonedMaterial = material.clone();
+          materials.push(clonedMaterial);
+          return clonedMaterial;
+        });
+      } else {
+        const clonedMaterial = object.material.clone();
+        materials.push(clonedMaterial);
+        object.material = clonedMaterial;
+      }
+    });
+
+    return { model: cloned, materials };
+  }, [scene]);
+
+  useEffect(() => {
+    materials.forEach((material) => applyStationMaterial(material, color, opacity, emissiveIntensity));
+  }, [color, emissiveIntensity, materials, opacity]);
+
+  useEffect(() => () => materials.forEach((material) => material.dispose()), [materials]);
+
+  return (
+    <>
+      <primitive object={model} scale={STATION_MODEL_SCALE} dispose={null} />
+      {isCritical && <CriticalMaterialPulse materials={materials} />}
+    </>
+  );
+}
+
+useGLTF.preload(STATION_MODEL_URL);
+
 function StationBox({ station, isSelected, onClick }: {
   station: Station;
   isSelected: boolean;
   onClick: (id: number) => void;
 }) {
-  const meshRef = useRef<THREE.Mesh>(null);
   const info = STATUS_MAP[station.status];
   const color = useMemo(() => new THREE.Color(info.color), [info.color]);
   const isCritical = station.status === "critical";
+  const edgeGeometry = useMemo(() => new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D), []);
 
-  useFrame(({ clock }) => {
-    if (!meshRef.current) return;
-    if (isCritical && meshRef.current.material instanceof THREE.Material) {
-      (meshRef.current.material as THREE.MeshStandardMaterial).emissiveIntensity =
-        0.3 + Math.sin(clock.getElapsedTime() * 3.5) * 0.22;
-    }
-  });
+  useEffect(() => () => edgeGeometry.dispose(), [edgeGeometry]);
 
   return (
-    <group position={[station.x, 0, station.z]}>
-      {/* Main box */}
-      <mesh
-        ref={meshRef}
-        position={[0, BOX_H / 2, 0]}
+    <group
+      position={[station.x, 0, station.z]}
+      onClick={(e) => { e.stopPropagation(); onClick(station.id); }}
+      onPointerEnter={() => { document.body.style.cursor = "pointer"; }}
+      onPointerLeave={() => { document.body.style.cursor = "default"; }}
+    >
+      <group
+        position={[0, 0, 0]}
         onClick={(e) => { e.stopPropagation(); onClick(station.id); }}
-        onPointerEnter={() => { document.body.style.cursor = "pointer"; }}
-        onPointerLeave={() => { document.body.style.cursor = "default"; }}
-        castShadow
-        receiveShadow
       >
-        <boxGeometry args={[BOX_W, BOX_H, BOX_D]} />
-        <meshStandardMaterial
+        <StationModel
           color={color}
-          emissive={color}
+          opacity={station.status === "offline" ? 0.55 : 1}
           emissiveIntensity={isSelected ? 0.55 : isCritical ? 0.4 : info.emissive}
-          metalness={0.7}
-          roughness={0.32}
-          transparent
-          opacity={station.status === "offline" ? 0.55 : 0.9}
+          isCritical={isCritical}
         />
-      </mesh>
+      </group>
 
       {/* Wireframe edges */}
       <lineSegments position={[0, BOX_H / 2, 0]}>
         <edgesGeometry
-          args={[new THREE.BoxGeometry(BOX_W, BOX_H, BOX_D)]}
+          args={[edgeGeometry]}
         />
         <lineBasicMaterial
           color={info.color}
@@ -404,7 +534,7 @@ function Scene3D({
         position={[10, 18, 10]}
         intensity={isDark ? 1.8 : 2.2}
         castShadow
-        shadow-mapSize={[2048, 2048]}
+        shadow-mapSize={[1024, 1024]}
         shadow-camera-near={0.5}
         shadow-camera-far={60}
         shadow-camera-left={-14}
@@ -478,6 +608,11 @@ export default function OxalysDashboard() {
   const [loadingStations, setLoadingStations] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [monitorRole, setMonitorRole] = useState<MonitorRole | null>(null);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+  const [adminLogs, setAdminLogs] = useState<AdminLog[]>([]);
+  const [adminMembers, setAdminMembers] = useState<AdminMember[]>([]);
+  const [adminLoading, setAdminLoading] = useState(false);
   const fablabIdRef = useRef<string | null>(null);
 
   const theme = isDark ? THEME.dark : THEME.light;
@@ -493,6 +628,7 @@ export default function OxalysDashboard() {
       const storedFablab = readStoredFablab();
       if (!storedFablab) {
         setLoadingStations(false);
+        router.replace("/connexion");
         return;
       }
 
@@ -504,7 +640,35 @@ export default function OxalysDashboard() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [router]);
+
+  useEffect(() => {
+    if (!fablab?.id) return;
+    let active = true;
+
+    const checkAccess = async () => {
+      const response = await fetch("/api/auth/access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fablabId: fablab.id }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!active) return;
+      if (!response.ok) {
+        localStorage.removeItem("oxalys_fablab");
+        localStorage.removeItem("oxalys_monitor_role");
+        router.replace("/connexion?error=handoff");
+        return;
+      }
+      setMonitorRole(payload.role as MonitorRole);
+      localStorage.setItem("oxalys_monitor_role", payload.role);
+    };
+
+    checkAccess().catch(() => router.replace("/connexion?error=handoff"));
+    return () => {
+      active = false;
+    };
+  }, [fablab?.id, router]);
 
   /* ── Load fablab + stations + polling toutes les 10s ── */
   useEffect(() => {
@@ -532,12 +696,12 @@ export default function OxalysDashboard() {
 
       setStations((prev) => {
         /* Preserve positions already assigned */
-        const posMap = new Map(prev.map((s) => [s.id, { x: s.x, z: s.z }]));
+        const previousById = new Map(prev.map((s) => [s.id, s]));
 
-        return raw.map((s, i) => {
-          const existing = prev.find((p) => p.id === s.id);
+        const next = raw.map((s, i) => {
+          const existing = previousById.get(s.id);
           const status = computeStatus(s);
-          const pos = posMap.get(s.id) ?? (() => {
+          const pos = existing ? { x: existing.x, z: existing.z } : (() => {
             const station = buildStation(s, i, raw.length);
             return { x: station.x, z: station.z };
           })();
@@ -553,6 +717,25 @@ export default function OxalysDashboard() {
             z: pos.z,
           };
         });
+
+        const unchanged =
+          next.length === prev.length &&
+          next.every((station, index) => {
+            const previous = prev[index];
+            return (
+              previous?.id === station.id &&
+              previous.air_qualite === station.air_qualite &&
+              previous.last_seen_at === station.last_seen_at &&
+              previous.nom === station.nom &&
+              previous.placement === station.placement &&
+              previous.status === station.status &&
+              previous.desc === station.desc &&
+              previous.x === station.x &&
+              previous.z === station.z
+            );
+          });
+
+        return unchanged ? prev : next;
       });
 
       setLastUpdate(new Date());
@@ -572,7 +755,7 @@ export default function OxalysDashboard() {
     /* Polling every 10 seconds */
     const interval = setInterval(() => {
       fetchStationsInternal(false).catch(console.error);
-    }, 1_000);
+    }, STATION_POLL_INTERVAL_MS);
 
     /* Realtime (bonus — fonctionne si activé dans Supabase) */
     const channel = supabase
@@ -608,11 +791,35 @@ export default function OxalysDashboard() {
 
   const criticalCount = useMemo(() => stations.filter((s) => s.status === "critical").length, [stations]);
 
+  const loadAdminPanel = async () => {
+    if (monitorRole !== "admin") return;
+    setAdminLoading(true);
+    try {
+      const response = await fetch("/api/admin");
+      const payload = await response.json();
+      if (!response.ok) return;
+      setAdminLogs(payload.logs ?? []);
+      setAdminMembers(payload.members ?? []);
+    } finally {
+      setAdminLoading(false);
+    }
+  };
+
+  const updateMemberRole = async (memberId: string, role: DbMembreRole) => {
+    const response = await fetch("/api/admin", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ memberId, role }),
+    });
+    if (response.ok) await loadAdminPanel();
+  };
+
   const handleLogout = async () => {
     setLoggingOut(true);
     const supabase = createClient();
     await supabase.auth.signOut();
     localStorage.removeItem("oxalys_fablab");
+    localStorage.removeItem("oxalys_monitor_role");
     router.push("/connexion");
     router.refresh();
   };
@@ -637,7 +844,8 @@ export default function OxalysDashboard() {
       >
         <Canvas
           shadows
-          gl={{ antialias: true, alpha: true }}
+          dpr={[1, 1.5]}
+          gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
           camera={{ fov: 50, near: 0.1, far: 500 }}
         >
           <Suspense fallback={null}>
@@ -741,6 +949,19 @@ export default function OxalysDashboard() {
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {monitorRole === "admin" && (
+              <button
+                onClick={() => {
+                  setIsAdminPanelOpen(true);
+                  void loadAdminPanel();
+                }}
+                className="rounded-xl px-3.5 py-2 text-[10px] font-bold uppercase tracking-wider transition-all"
+                style={{ ...glassPanelStyle, color: "#f59e0b" }}
+              >
+                Panel Admin
+              </button>
+            )}
 
             {/* Theme toggle */}
             <button
@@ -1208,6 +1429,114 @@ export default function OxalysDashboard() {
                 </button>
               </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isAdminPanelOpen && monitorRole === "admin" && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-40 bg-black/55 backdrop-blur-sm"
+            onClick={() => setIsAdminPanelOpen(false)}
+          >
+            <motion.div
+              initial={{ x: "105%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "105%" }}
+              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute right-4 top-4 bottom-4 w-[min(940px,calc(100vw-2rem))] rounded-3xl overflow-hidden"
+              style={glassPanelStyle}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between gap-4 border-b px-6 py-5" style={{ borderColor: theme.panelBorder }}>
+                <div>
+                  <p className="text-[9px] font-black uppercase tracking-[0.3em]" style={{ color: theme.textSubtle }}>Administration</p>
+                  <h2 className="text-lg font-black">Logs FabLabs et roles</h2>
+                </div>
+                <button
+                  onClick={() => setIsAdminPanelOpen(false)}
+                  className="h-8 w-8 rounded-xl text-sm"
+                  style={{ color: theme.textMuted, border: `1px solid ${theme.panelBorder}` }}
+                >
+                  x
+                </button>
+              </div>
+
+              <div className="grid h-[calc(100%-73px)] grid-cols-1 lg:grid-cols-2 overflow-hidden">
+                <div className="overflow-y-auto border-r p-5" style={{ borderColor: theme.panelBorder }}>
+                  <div className="mb-4 flex items-center justify-between">
+                    <h3 className="text-sm font-black">Membres</h3>
+                    <button onClick={loadAdminPanel} className="rounded-lg px-3 py-1.5 text-[10px] font-bold" style={{ border: `1px solid ${theme.panelBorder}`, color: theme.textMuted }}>
+                      Actualiser
+                    </button>
+                  </div>
+                  {adminLoading ? (
+                    <p className="text-xs" style={{ color: theme.textMuted }}>Chargement...</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {adminMembers.map((member) => {
+                        const name = `${member.prenom ?? ""} ${member.nom ?? ""}`.trim() || member.email || member.id;
+                        return (
+                          <div key={member.id} className="rounded-2xl p-3" style={{ background: isDark ? "rgba(255,255,255,0.035)" : "rgba(0,0,0,0.04)", border: `1px solid ${theme.panelBorder}` }}>
+                            <div className="mb-3">
+                              <p className="text-xs font-bold truncate">{name}</p>
+                              <p className="text-[10px] truncate" style={{ color: theme.textMuted }}>{member.email}</p>
+                              <p className="mt-1 text-[9px] font-mono uppercase tracking-widest" style={{ color: theme.textSubtle }}>
+                                {member.fablab_ref ? `FabLab ${member.fablab_ref}` : "FabLab non associe"}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {ADMIN_ROLE_OPTIONS.map((option) => {
+                                const active = member.role === option.value;
+                                return (
+                                  <button
+                                    key={option.value}
+                                    onClick={() => updateMemberRole(member.id, option.value)}
+                                    className="rounded-lg px-3 py-1.5 text-[10px] font-black uppercase"
+                                    style={{
+                                      background: active ? `${option.color}26` : "transparent",
+                                      border: `1px solid ${option.color}55`,
+                                      color: option.color,
+                                    }}
+                                  >
+                                    {option.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="overflow-y-auto p-5">
+                  <h3 className="mb-4 text-sm font-black">Logs tous FabLabs</h3>
+                  <div className="space-y-2">
+                    {adminLogs.map((log) => (
+                      <div key={log.id} className="rounded-2xl p-3" style={{ background: isDark ? "rgba(255,255,255,0.035)" : "rgba(0,0,0,0.04)", border: `1px solid ${theme.panelBorder}` }}>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-xs font-bold">{log.action}</p>
+                          <span className="text-[9px] font-mono" style={{ color: theme.textSubtle }}>
+                            {new Date(log.created_at).toLocaleString("fr-FR")}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[10px]" style={{ color: theme.textMuted }}>
+                          Role {log.actor_role ?? "system"} - FabLab {log.fablab_id ?? "global"}
+                        </p>
+                        <pre className="mt-2 max-h-20 overflow-auto rounded-lg p-2 text-[9px]" style={{ background: isDark ? "rgba(0,0,0,0.28)" : "rgba(255,255,255,0.5)", color: theme.textMuted }}>
+                          {JSON.stringify(log.details ?? {}, null, 2)}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

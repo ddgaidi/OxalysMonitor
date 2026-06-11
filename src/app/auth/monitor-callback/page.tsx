@@ -77,6 +77,25 @@ function MonitorCallbackInner() {
         // continue even if storage fails
       }
 
+      const accessResponse = await fetch("/api/auth/access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fablabId: schoolId }),
+      });
+      const accessPayload = await accessResponse.json().catch(() => ({}));
+      if (!accessResponse.ok) {
+        if (!cancelled) {
+          setMessage("Accès au moniteur refusé.");
+          router.replace("/connexion?error=handoff");
+        }
+        return;
+      }
+      try {
+        localStorage.setItem("oxalys_monitor_role", accessPayload.role);
+      } catch {
+        // ignore
+      }
+
       if (!cancelled) {
         router.replace("/dashboard");
         router.refresh();

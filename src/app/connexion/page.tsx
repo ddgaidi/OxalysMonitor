@@ -85,6 +85,19 @@ function getGradient(index: number) {
   return GRADIENT_PAIRS[index % GRADIENT_PAIRS.length];
 }
 
+function errorMessageFromQuery(value: string | null): string {
+  if (value === "handoff") {
+    return "La connexion depuis Oxalys Teach a échoué. Reconnectez-vous ici.";
+  }
+  if (value === "fablab") {
+    return "Établissement introuvable. Choisissez de nouveau le vôtre puis connectez-vous.";
+  }
+  if (value === "sso_config") {
+    return "Configuration serveur incomplète (SSO). Vérifiez OXALYS_SSO_SHARED_SECRET et MONITOR_SSO_DEMO sur Vercel.";
+  }
+  return "";
+}
+
 export default function ConnexionPage() {
   const router = useRouter();
   const [isDark, setIsDark] = useState(true);
@@ -134,14 +147,11 @@ export default function ConnexionPage() {
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    const err = p.get("error");
-    if (err === "handoff") {
-      setError("La connexion depuis Oxalys Teach a échoué. Reconnectez-vous ici.");
-    } else if (err === "fablab") {
-      setError("Établissement introuvable. Choisissez de nouveau le vôtre puis connectez-vous.");
-    } else if (err === "sso_config") {
-      setError("Configuration serveur incomplète (SSO). Vérifiez OXALYS_SSO_SHARED_SECRET et MONITOR_SSO_DEMO sur Vercel.");
-    }
+    const message = errorMessageFromQuery(p.get("error"));
+    if (!message) return;
+
+    const timeoutId = window.setTimeout(() => setError(message), 0);
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
   const filteredFablabs = useMemo(() => fablabs.filter(
@@ -173,9 +183,29 @@ export default function ConnexionPage() {
       return;
     }
 
+    const accessResponse = await fetch("/api/auth/access", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fablabId: selectedFablab?.id }),
+    });
+    const accessPayload = await accessResponse.json();
+    if (!accessResponse.ok) {
+      await supabase.auth.signOut();
+      setLoading(false);
+      setError(
+        accessPayload.error === "forbidden_role"
+          ? "Acces reserve aux professeurs, techniciens et admins."
+          : accessPayload.error === "school_mismatch"
+            ? "Ce compte n'est pas rattache a ce FabLab."
+            : "Acces OxalysMonitor refuse.",
+      );
+      return;
+    }
+
     if (selectedFablab) {
       localStorage.setItem("oxalys_fablab", JSON.stringify(selectedFablab));
     }
+    localStorage.setItem("oxalys_monitor_role", accessPayload.role);
 
     router.push("/dashboard");
     router.refresh();
